@@ -56,9 +56,12 @@
           parted -s "$B" mklabel gpt mkpart p1 1MiB 100%
           mknodes "$B"; pvcreate -y "${B}p1"
           vgcreate {{ _vg }} "${B}p1"
-          lvcreate -y -L 1.2G -n lvdata {{ _vg }}
-          mkfs.ext4 -q /dev/{{ _vg }}/lvdata
-          mount /dev/{{ _vg }}/lvdata /mnt/lvm
+          # -Zn: no udev in containers means the fresh LV node is not
+          # there to wipe; dmsetup mknodes creates the mapper nodes
+          lvcreate -y -Zn -L 1.2G -n lvdata {{ _vg }}
+          dmsetup mknodes
+          mkfs.ext4 -q /dev/mapper/{{ _vg }}-lvdata
+          mount /dev/mapper/{{ _vg }}-lvdata /mnt/lvm
           dd if=/dev/zero of=/mnt/lvm/fill bs=1M count=1000 status=none
           echo "$B" > loopB
 
