@@ -29,11 +29,23 @@
           mkdir -p /opt/medic /mnt/plain /mnt/lvm /mnt/small /mnt/mid
           cd /opt/medic
 
+          # containers have no udev: partition device nodes must be
+          # created by hand from sysfs after partitioning
+          mknodes() {
+            local d; d=$(basename "$1")
+            partprobe "$1" 2>/dev/null || true
+            for s in /sys/block/$d/${d}p*; do
+              [ -e "$s/dev" ] || continue
+              local mm; mm=$(cat "$s/dev")
+              mknod "/dev/$(basename "$s")" b "${mm%%:*}" "${mm##*:}" 2>/dev/null || true
+            done
+          }
+
           # A: plain xfs partition, 2GiB, filled past threshold
           truncate -s 2G diskA.img
           A=$(losetup -f --show -P diskA.img)
           parted -s "$A" mklabel gpt mkpart p1 xfs 1MiB 100%
-          sleep 1; mkfs.xfs -q "${A}p1"
+          mknodes "$A"; mkfs.xfs -q "${A}p1"
           mount "${A}p1" /mnt/plain
           dd if=/dev/zero of=/mnt/plain/fill bs=1M count=1700 status=none
           echo "$A" > loopA
@@ -42,7 +54,7 @@
           truncate -s 4G diskB.img
           B=$(losetup -f --show -P diskB.img)
           parted -s "$B" mklabel gpt mkpart p1 1MiB 100%
-          sleep 1; pvcreate -y "${B}p1"
+          mknodes "$B"; pvcreate -y "${B}p1"
           vgcreate {{ _vg }} "${B}p1"
           lvcreate -y -L 1.2G -n lvdata {{ _vg }}
           mkfs.ext4 -q /dev/{{ _vg }}/lvdata
@@ -54,7 +66,7 @@
           truncate -s 1G diskD.img
           D=$(losetup -f --show -P diskD.img)
           parted -s "$D" mklabel gpt mkpart p1 xfs 1MiB 100%
-          sleep 1; mkfs.xfs -q "${D}p1"
+          mknodes "$D"; mkfs.xfs -q "${D}p1"
           mount "${D}p1" /mnt/small
           dd if=/dev/zero of=/mnt/small/fill bs=1M count=850 status=none
           echo "$D" > loopD
@@ -63,7 +75,7 @@
           truncate -s 2G diskE.img
           E=$(losetup -f --show -P diskE.img)
           parted -s "$E" mklabel gpt mkpart p1 xfs 1MiB 50% mkpart p2 xfs 50% 100%
-          sleep 1; mkfs.xfs -q "${E}p1"
+          mknodes "$E"; mkfs.xfs -q "${E}p1"
           mount "${E}p1" /mnt/mid
           dd if=/dev/zero of=/mnt/mid/fill bs=1M count=850 status=none
           echo "$E" > loopE
