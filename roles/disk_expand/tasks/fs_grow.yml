@@ -1,0 +1,18 @@
+---
+- name: "Grow xfs on {{ _disk_expand_mount }}"
+  when: _de_fstype == 'xfs'
+  ansible.builtin.command:
+    argv: [xfs_growfs, "{{ _disk_expand_mount }}"]
+  changed_when: true
+
+- name: "Grow ext4 on {{ _disk_expand_mount }}"
+  when: _de_fstype in ['ext4', 'ext3']
+  ansible.builtin.command:
+    argv: [resize2fs, "{{ _de_dev }}"]
+  changed_when: true
+
+- name: "Unsupported filesystem on {{ _disk_expand_mount }}"
+  when: _de_fstype not in ['xfs', 'ext4', 'ext3']
+  ansible.builtin.set_fact:
+    _de_reason: unsupported_fs
+    _de_reason_detail: "cannot grow fstype '{{ _de_fstype }}'"

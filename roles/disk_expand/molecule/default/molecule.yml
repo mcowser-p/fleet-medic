@@ -1,0 +1,32 @@
+---
+driver:
+  name: docker
+platforms:
+  - name: medic-alma9
+    image: almalinux:9
+    pre_build_image: true
+    privileged: true          # loop devices + LVM need it
+  - name: medic-ubuntu
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+
+role_name_check: 1
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ../../../../roles

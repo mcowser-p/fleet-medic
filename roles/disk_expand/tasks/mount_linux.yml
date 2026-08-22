@@ -1,0 +1,75 @@
+---
+# One mount. Measures, optionally reclaims, then grows LV -> disk as
+# needed. Appends {mount, status, reason, detail, before/after} to the
+# result. status: ok | resolved_by_hygiene | resolved_by_lv |
+# resolved_by_disk | dry_run | fail
+
+- name: "Probe the layout of {{ _disk_expand_mount }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      m={{ _disk_expand_mount | quote }}
+      read -r dev fstype <<< "$(findmnt -no SOURCE,FSTYPE "$m" 2>/dev/null)"
+      echo "DEV=${dev:-}"
+      echo "FSTYPE=${fstype:-}"
+      pct=$(df --output=pcent "$m" 2>/dev/null | tail -1 | tr -dc '0-9')
+      echo "PCT=${pct:-0}"
+      echo "USED=$(df -B1 --output=used "$m" 2>/dev/null | tail -1 | tr -d ' ')"
+      echo "SIZE=$(df -B1 --output=size "$m" 2>/dev/null | tail -1 | tr -d ' ')"
+      if [ -z "$dev" ]; then echo "KIND=missing"; echo "DISK="; echo "PART="; echo "PARTNUM="; echo "VG="; echo "LV="; echo "PV="; echo "VGFREE=0"; echo "DISKSIZE=0"; echo "LAST=0"; exit 0; fi
+      if lvs --noheadings "$dev" >/dev/null 2>&1; then
+        echo "KIND=lvm"
+        vg=$(lvs --noheadings -o vg_name "$dev" 2>/dev/null | tr -d ' ')
+        echo "VG=$vg"
+        echo "LV=$dev"
+        echo "VGFREE=$(vgs --noheadings --units b -o vg_free "$vg" 2>/dev/null | tr -dc '0-9')"
+        pv=$(pvs --noheadings -o pv_name -S vg_name="$vg" 2>/dev/null | head -1 | tr -d ' ')
+        echo "PV=$pv"
+        part="$pv"
+      else
+        echo "KIND=part"
+        echo "VG="; echo "LV="; echo "PV="; echo "VGFREE=0"
+        part="$dev"
+      fi
+      pname=$(lsblk -no PKNAME "$part" 2>/dev/null | head -1)
+      echo "PART=$part"
+      echo "DISK=/dev/${pname:-}"
+      echo "PARTNUM=$(echo "$part" | grep -oE '[0-9]+$' || echo 0)"
+      echo "DISKSIZE=$(lsblk -bdno SIZE "/dev/${pname:-missing}" 2>/dev/null || echo 0)"
+      # is our partition the last on the disk (growable in place)?
+      last=$(lsblk -rbno NAME,START "/dev/${pname:-missing}" 2>/dev/null | tail -n +2 | sort -k2 -n | tail -1 | awk '{print $1}')
+      [ "/dev/$last" = "$part" ] || [ "$(basename "$part")" = "$last" ] && echo "LAST=1" || echo "LAST=0"
+  register: _disk_expand_probe
+  changed_when: false
+
+- name: "Parse the probe of {{ _disk_expand_mount }}"
+  vars:
+    _g: "{{ _disk_expand_probe.stdout_lines }}"
+  ansible.builtin.set_fact:
+    _de_pct: "{{ (_g | select('match', '^PCT=') | first | default('PCT=0')).split('=', 1) | last | int }}"
+    _de_kind: "{{ (_g | select('match', '^KIND=') | first | default('KIND=missing')).split('=', 1) | last }}"
+    _de_fstype: "{{ (_g | select('match', '^FSTYPE=') | first | default('FSTYPE=')).split('=', 1) | last }}"
+    _de_dev: "{{ (_g | select('match', '^DEV=') | first | default('DEV=')).split('=', 1) | last }}"
+    _de_disk: "{{ (_g | select('match', '^DISK=') | first | default('DISK=')).split('=', 1) | last }}"
+    _de_part: "{{ (_g | select('match', '^PART=') | first | default('PART=')).split('=', 1) | last }}"
+    _de_partnum: "{{ (_g | select('match', '^PARTNUM=') | first | default('PARTNUM=0')).split('=', 1) | last }}"
+    _de_vg: "{{ (_g | select('match', '^VG=') | first | default('VG=')).split('=', 1) | last }}"
+    _de_lv: "{{ (_g | select('match', '^LV=') | first | default('LV=')).split('=', 1) | last }}"
+    _de_vgfree: "{{ (_g | select('match', '^VGFREE=') | first | default('VGFREE=0')).split('=', 1) | last | int }}"
+    _de_disksize: "{{ (_g | select('match', '^DISKSIZE=') | first | default('DISKSIZE=0')).split('=', 1) | last | int }}"
+    _de_last: "{{ ((_g | select('match', '^LAST=') | first | default('LAST=0')).split('=', 1) | last) == '1' }}"
+
+- name: "Below threshold — record ok for {{ _disk_expand_mount }}"
+  when: _de_pct | int < fleet_medic_expand_threshold | int
+  ansible.builtin.set_fact:
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result
+         | combine({'mounts': fleet_medic_expand_result.mounts + [{
+              'mount': _disk_expand_mount, 'status': 'ok', 'reason': '',
+              'usage_pct': _de_pct | int,
+              'detail': 'usage ' ~ _de_pct ~ '% < threshold ' ~ fleet_medic_expand_threshold ~ '%'}]}) }}
+
+- name: "Act on {{ _disk_expand_mount }}"
+  when: _de_pct | int >= fleet_medic_expand_threshold | int
+  ansible.builtin.include_tasks: act_linux.yml

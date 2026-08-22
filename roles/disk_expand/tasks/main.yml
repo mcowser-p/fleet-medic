@@ -1,0 +1,58 @@
+---
+- name: Initialize the expansion result
+  ansible.builtin.set_fact:
+    fleet_medic_expand_result:
+      driver: ""
+      mounts: []
+
+- name: Resolve the driver
+  vars:
+    _vendor: "{{ ansible_system_vendor | default('') | lower }}"
+  ansible.builtin.set_fact:
+    _disk_expand_driver: >-
+      {{ fleet_medic_expand_driver
+         if fleet_medic_expand_driver != 'auto'
+         else ('aws' if 'amazon' in _vendor
+               else ('vmware' if 'vmware' in _vendor else 'none')) }}
+
+- name: Record the driver
+  ansible.builtin.set_fact:
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result | combine({'driver': _disk_expand_driver}) }}
+
+- name: Evaluate mounts (linux)
+  when: ansible_os_family != 'Windows'
+  vars:
+    _candidates: >-
+      {{ fleet_medic_expand_mounts
+         if fleet_medic_expand_mounts | length > 0
+         else ansible_mounts
+              | rejectattr('fstype', 'in', ['tmpfs', 'devtmpfs', 'overlay', 'squashfs', 'iso9660', 'vfat'])
+              | map(attribute='mount')
+              | reject('match', '^/boot')
+              | list }}
+  ansible.builtin.include_tasks: mount_linux.yml
+  loop: "{{ _candidates }}"
+  loop_control:
+    loop_var: _disk_expand_mount
+
+- name: Evaluate drives (windows)
+  when: ansible_os_family == 'Windows'
+  ansible.builtin.include_tasks: drive_windows.yml
+  loop: "{{ fleet_medic_expand_windows_drives }}"
+  loop_control:
+    loop_var: _disk_expand_drive
+
+- name: Report
+  ansible.builtin.include_role:
+    name: medic_report
+  vars:
+    medic_report_source: disk_expand
+    medic_report_outcome: "{{ 'fail' if fleet_medic_expand_result.mounts | selectattr('status', 'eq', 'fail') | list | length > 0 else 'ok' }}"
+    medic_report_reasons: >-
+      {{ fleet_medic_expand_result.mounts | selectattr('status', 'eq', 'fail')
+         | map(attribute='reason') | list }}
+    medic_report_payload: "{{ fleet_medic_expand_result }}"
+    medic_report_datadog_api_key: "{{ fleet_medic_expand_datadog_api_key }}"
+    medic_report_file: "{{ fleet_medic_expand_report_file }}"
+    medic_report_fail_on: "{{ fleet_medic_expand_fail_on }}"

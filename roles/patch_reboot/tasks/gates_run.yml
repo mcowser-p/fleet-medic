@@ -1,0 +1,87 @@
+---
+# Run every configured gate; append {name, phase, status, detail} per
+# gate and a gate_failed:<name> reason on failure.
+
+- name: "Gate systemd state"
+  when:
+    - _patch_reboot_gates.systemd_degraded | bool
+    - ansible_os_family != 'Windows'
+  ansible.builtin.command:
+    argv: [systemctl, is-system-running]
+  register: _patch_reboot_sysstate
+  changed_when: false
+  failed_when: false
+  retries: "{{ fleet_medic_health_retries }}"
+  delay: "{{ fleet_medic_health_delay }}"
+  until: (_patch_reboot_sysstate.stdout | trim) in ['running']
+
+- name: "Record the systemd gate"
+  when:
+    - _patch_reboot_gates.systemd_degraded | bool
+    - ansible_os_family != 'Windows'
+  vars:
+    _state: "{{ _patch_reboot_sysstate.stdout | trim }}"
+    _ok: "{{ _state == 'running' }}"
+  ansible.builtin.set_fact:
+    fleet_medic_patch_result: >-
+      {{ fleet_medic_patch_result
+         | combine({'gates': fleet_medic_patch_result.gates + [{
+              'name': 'systemd', 'phase': _patch_reboot_gate_phase,
+              'status': 'ok' if _ok else 'fail',
+              'detail': 'system is ' ~ _state}],
+            'reasons': fleet_medic_patch_result.reasons
+              + ([] if _ok else ['gate_failed:systemd'])}) }}
+
+- name: "Gate each required service"
+  ansible.builtin.include_tasks: gate_service.yml
+  loop: "{{ _patch_reboot_gates.services }}"
+  loop_control:
+    loop_var: _patch_reboot_gate_svc
+
+- name: "Gate each http check"
+  ansible.builtin.include_tasks: gate_http.yml
+  loop: "{{ _patch_reboot_gates.http_checks }}"
+  loop_control:
+    loop_var: _patch_reboot_gate_http
+    label: "{{ _patch_reboot_gate_http.url | default('?') }}"
+
+- name: "Gate the custom command (linux)"
+  when:
+    - _patch_reboot_gates.command | length > 0
+    - ansible_os_family != 'Windows'
+  ansible.builtin.command:
+    cmd: "{{ _patch_reboot_gates.command }}"
+  register: _patch_reboot_cmd
+  changed_when: false
+  failed_when: false
+  retries: "{{ fleet_medic_health_retries }}"
+  delay: "{{ fleet_medic_health_delay }}"
+  until: _patch_reboot_cmd.rc == 0
+
+- name: "Gate the custom command (windows)"
+  when:
+    - _patch_reboot_gates.command | length > 0
+    - ansible_os_family == 'Windows'
+  ansible.windows.win_command:
+    cmd: "{{ _patch_reboot_gates.command }}"
+  register: _patch_reboot_cmd_win
+  changed_when: false
+  failed_when: false
+  retries: "{{ fleet_medic_health_retries }}"
+  delay: "{{ fleet_medic_health_delay }}"
+  until: _patch_reboot_cmd_win.rc == 0
+
+- name: "Record the command gate"
+  when: _patch_reboot_gates.command | length > 0
+  vars:
+    _rc: >-
+      {{ _patch_reboot_cmd.rc | default(_patch_reboot_cmd_win.rc | default(1)) }}
+  ansible.builtin.set_fact:
+    fleet_medic_patch_result: >-
+      {{ fleet_medic_patch_result
+         | combine({'gates': fleet_medic_patch_result.gates + [{
+              'name': 'command', 'phase': _patch_reboot_gate_phase,
+              'status': 'ok' if _rc | int == 0 else 'fail',
+              'detail': _patch_reboot_gates.command ~ ' -> rc ' ~ _rc}],
+            'reasons': fleet_medic_patch_result.reasons
+              + ([] if _rc | int == 0 else ['gate_failed:command'])}) }}

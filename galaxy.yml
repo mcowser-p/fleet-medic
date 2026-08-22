@@ -1,0 +1,49 @@
+---
+# Ansible Galaxy collection manifest for mcowser_p.fleet_medic.
+#
+# `version` is a placeholder — semantic-release stamps the released version
+# here at release time (see .releaserc.js). Do not bump it by hand.
+namespace: mcowser_p
+name: fleet_medic
+version: 0.0.0
+readme: README.md
+authors:
+  - mcowser-p
+description: >-
+  fleet-medic — keep servers healthy over time. Threshold-driven disk
+  expansion for AWS EBS and VMware disks (single-partition and LVM
+  layouts on Linux, single-partition on Windows) with a
+  try-cleanup-first policy and hard guardrails; disk hygiene (journald,
+  old kernels, caches, aged paths); patch and reboot orchestration with
+  per-host health gates; and Datadog event reporting with a failure
+  taxonomy — built to be triggered from Datadog via an Ascender job
+  template.
+license:
+  - Apache-2.0
+tags:
+  - storage
+  - lvm
+  - patching
+  - maintenance
+  - monitoring
+  - windows
+  - linux
+dependencies:
+  ansible.windows: '>=2.0.0'
+  amazon.aws: '>=9.0.0'
+  community.vmware: '>=5.0.0'
+repository: https://github.com/mcowser-p/fleet-medic
+homepage: https://github.com/mcowser-p/fleet-medic
+issues: https://github.com/mcowser-p/fleet-medic/issues
+build_ignore:
+  - .github
+  - .git
+  - .gitignore
+  - .releaserc.js
+  - .ansible-lint
+  - .yamllint
+  - package.json
+  - package-lock.json
+  - node_modules
+  - requirements.txt
+  - '*.tar.gz'

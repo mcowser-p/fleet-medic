@@ -1,0 +1,25 @@
+---
+- name: Apply Windows updates
+  block:
+    - name: Run Windows Update
+      ansible.windows.win_updates:
+        category_names: "{{ fleet_medic_patch_win_categories }}"
+        state: "{{ 'searched' if fleet_medic_patch_check_mode else 'installed' }}"
+        reboot: false
+      register: _patch_reboot_wu
+
+    - name: Record the patch outcome
+      ansible.builtin.set_fact:
+        fleet_medic_patch_result: >-
+          {{ fleet_medic_patch_result
+             | combine({'updates': _patch_reboot_wu.found_update_count | default(0),
+                        'installed': _patch_reboot_wu.installed_update_count | default(0),
+                        'check_mode': fleet_medic_patch_check_mode | bool,
+                        'reboot_needed': _patch_reboot_wu.reboot_required | default(false)}) }}
+  rescue:
+    - name: Record the patch failure
+      ansible.builtin.set_fact:
+        fleet_medic_patch_result: >-
+          {{ fleet_medic_patch_result
+             | combine({'reasons': fleet_medic_patch_result.reasons + ['patch_failed'],
+                        'patch_error': ansible_failed_result.msg | default('unknown')}) }}

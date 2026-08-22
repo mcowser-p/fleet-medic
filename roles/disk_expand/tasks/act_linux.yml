@@ -1,0 +1,81 @@
+---
+# Over-threshold action chain for one linux mount:
+# hygiene -> LV step (free VG space) -> disk grow (driver) + OS chain.
+
+- name: "Try hygiene first on {{ _disk_expand_mount }}"
+  when: fleet_medic_expand_hygiene_first and not fleet_medic_expand_dry_run
+  ansible.builtin.include_role:
+    name: disk_hygiene
+  vars:
+    fleet_medic_hygiene_dry_run: false
+    fleet_medic_hygiene_fail_on: never
+    fleet_medic_hygiene_datadog_api_key: ""   # one event per run, not per step
+
+- name: "Re-measure {{ _disk_expand_mount }} after hygiene"
+  when: fleet_medic_expand_hygiene_first and not fleet_medic_expand_dry_run
+  ansible.builtin.command:
+    argv: [df, --output=pcent, "{{ _disk_expand_mount }}"]
+  register: _disk_expand_repct
+  changed_when: false
+
+- name: "Update usage for {{ _disk_expand_mount }}"
+  when: fleet_medic_expand_hygiene_first and not fleet_medic_expand_dry_run
+  ansible.builtin.set_fact:
+    _de_pct: "{{ _disk_expand_repct.stdout_lines | last | trim | replace('%', '') | int }}"
+
+- name: "Hygiene resolved {{ _disk_expand_mount }}"
+  when:
+    - fleet_medic_expand_hygiene_first and not fleet_medic_expand_dry_run
+    - _de_pct | int < fleet_medic_expand_threshold | int
+  ansible.builtin.set_fact:
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result
+         | combine({'mounts': fleet_medic_expand_result.mounts + [{
+              'mount': _disk_expand_mount, 'status': 'resolved_by_hygiene', 'reason': '',
+              'usage_pct': _de_pct | int,
+              'detail': 'cleanup brought usage to ' ~ _de_pct ~ '%'}]}) }}
+    _de_done: true
+
+- name: "Grow {{ _disk_expand_mount }}"
+  when: _de_done | default(false) == false
+  block:
+    - name: "Compute the growth plan for {{ _disk_expand_mount }}"
+      vars:
+        _cap_gib: >-
+          {{ fleet_medic_expand_max_gib_per_mount.get(_disk_expand_mount,
+             fleet_medic_expand_max_gib) }}
+        _disk_gib: "{{ ((_de_disksize | int) / 1073741824) | round(0, 'ceil') | int }}"
+        _next: >-
+          {{ fleet_medic_expand_steps_gib
+             | select('>', _disk_gib | int) | list | first | default(0) }}
+      ansible.builtin.set_fact:
+        _de_cap_gib: "{{ _cap_gib }}"
+        _de_disk_gib: "{{ _disk_gib }}"
+        _de_target_gib: "{{ _next if _next | int <= _cap_gib | int else 0 }}"
+
+    - name: "Use free VG space on {{ _disk_expand_mount }}"
+      when:
+        - _de_kind == 'lvm'
+        - _de_vgfree | int > 1073741824    # >1GiB of usable free space
+      ansible.builtin.include_tasks: lv_grow.yml
+
+    - name: "Grow the disk under {{ _disk_expand_mount }}"
+      when: _de_done | default(false) == false
+      ansible.builtin.include_tasks: disk_grow.yml
+
+- name: "Record failure for {{ _disk_expand_mount }}"
+  when: _de_done | default(false) == false
+  ansible.builtin.set_fact:
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result
+         | combine({'mounts': fleet_medic_expand_result.mounts + [{
+              'mount': _disk_expand_mount, 'status': 'fail',
+              'reason': _de_reason | default('unresolved'),
+              'usage_pct': _de_pct | int,
+              'detail': _de_reason_detail | default('no growth path succeeded')}]}) }}
+
+- name: "Reset per-mount state"
+  ansible.builtin.set_fact:
+    _de_done: false
+    _de_reason: ""
+    _de_reason_detail: ""

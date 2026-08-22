@@ -1,0 +1,40 @@
+---
+- name: "Check the service is active — {{ _patch_reboot_gate_svc }}"
+  when: ansible_os_family != 'Windows'
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ _patch_reboot_gate_svc }}"]
+  register: _patch_reboot_svc_lin
+  changed_when: false
+  failed_when: false
+  retries: "{{ fleet_medic_health_retries }}"
+  delay: "{{ fleet_medic_health_delay }}"
+  until: (_patch_reboot_svc_lin.stdout | trim) == 'active'
+
+- name: "Check the service is running (windows) — {{ _patch_reboot_gate_svc }}"
+  when: ansible_os_family == 'Windows'
+  ansible.windows.win_service_info:
+    name: "{{ _patch_reboot_gate_svc }}"
+  register: _patch_reboot_svc_win
+  retries: "{{ fleet_medic_health_retries }}"
+  delay: "{{ fleet_medic_health_delay }}"
+  until: >-
+    _patch_reboot_svc_win.services | default([]) | length > 0
+    and _patch_reboot_svc_win.services[0].state == 'started'
+
+- name: "Record the service gate — {{ _patch_reboot_gate_svc }}"
+  vars:
+    _ok: >-
+      {{ ((_patch_reboot_svc_lin.stdout | default('') | trim) == 'active')
+         if ansible_os_family != 'Windows'
+         else (_patch_reboot_svc_win.services | default([]) | length > 0
+               and _patch_reboot_svc_win.services[0].state == 'started') }}
+  ansible.builtin.set_fact:
+    fleet_medic_patch_result: >-
+      {{ fleet_medic_patch_result
+         | combine({'gates': fleet_medic_patch_result.gates + [{
+              'name': 'service:' ~ _patch_reboot_gate_svc,
+              'phase': _patch_reboot_gate_phase,
+              'status': 'ok' if _ok else 'fail',
+              'detail': _patch_reboot_gate_svc ~ (' active' if _ok else ' NOT active')}],
+            'reasons': fleet_medic_patch_result.reasons
+              + ([] if _ok else ['gate_failed:service:' ~ _patch_reboot_gate_svc])}) }}

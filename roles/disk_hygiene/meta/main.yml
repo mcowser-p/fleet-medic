@@ -1,0 +1,20 @@
+---
+galaxy_info:
+  namespace: mcowser_p
+  role_name: disk_hygiene
+  author: mcowser-p
+  description: >-
+    Disk hygiene - journald vacuum, old kernels, package caches, aged
+    path rules, Windows temp/recycle-bin - dry-run by default, bytes
+    freed reported
+  license: Apache-2.0
+  min_ansible_version: '2.16'
+  platforms:
+    - name: EL
+      versions: ['9', '10']
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Windows
+      versions: ['2022']
+  galaxy_tags: [storage, maintenance, cleanup]
+dependencies: []

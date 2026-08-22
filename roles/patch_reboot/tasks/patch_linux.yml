@@ -1,0 +1,66 @@
+---
+- name: Apply updates
+  block:
+    - name: Update packages (dnf)
+      when: ansible_pkg_mgr == 'dnf'
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+        security: "{{ fleet_medic_patch_security_only | bool }}"
+        exclude: "{{ fleet_medic_patch_exclude }}"
+        autoremove: "{{ fleet_medic_patch_autoremove | bool }}"
+      check_mode: "{{ fleet_medic_patch_check_mode | bool }}"
+      register: _patch_reboot_dnf
+
+    - name: Warn that apt has no native security-only path
+      when:
+        - ansible_pkg_mgr == 'apt'
+        - fleet_medic_patch_security_only | bool
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: security_only is not natively supported with apt — a
+          full upgrade will run. Use unattended-upgrades for
+          security-channel-only patching on Debian-family hosts.
+
+    - name: Update packages (apt)
+      when: ansible_pkg_mgr == 'apt'
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+      check_mode: "{{ fleet_medic_patch_check_mode | bool }}"
+      register: _patch_reboot_apt
+
+    - name: Detect whether a reboot is needed
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          if [ -f /var/run/reboot-required ]; then echo NEEDED; exit 0; fi
+          if command -v needs-restarting >/dev/null; then
+            needs-restarting -r >/dev/null 2>&1 && echo NOT_NEEDED || echo NEEDED
+          else
+            echo UNKNOWN
+          fi
+      register: _patch_reboot_need
+      changed_when: false
+
+    - name: Record the patch outcome
+      vars:
+        _r: "{{ _patch_reboot_dnf if ansible_pkg_mgr == 'dnf' else _patch_reboot_apt }}"
+        _count: >-
+          {{ _r.results | default([]) | length
+             if ansible_pkg_mgr == 'dnf'
+             else (1 if _r.changed | default(false) else 0) }}
+      ansible.builtin.set_fact:
+        fleet_medic_patch_result: >-
+          {{ fleet_medic_patch_result
+             | combine({'updates': _count | int,
+                        'changed': _r.changed | default(false),
+                        'check_mode': fleet_medic_patch_check_mode | bool,
+                        'reboot_needed': 'NEEDED' in _patch_reboot_need.stdout}) }}
+  rescue:
+    - name: Record the patch failure
+      ansible.builtin.set_fact:
+        fleet_medic_patch_result: >-
+          {{ fleet_medic_patch_result
+             | combine({'reasons': fleet_medic_patch_result.reasons + ['patch_failed'],
+                        'patch_error': ansible_failed_result.msg | default('unknown')}) }}

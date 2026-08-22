@@ -1,0 +1,38 @@
+---
+- name: Windows fleet-medic checks over both transports
+  hosts: windows
+  tasks:
+    - name: Disk report (no growth expected on the runner)
+      ansible.builtin.include_role:
+        name: disk_expand
+      vars:
+        fleet_medic_expand_driver: none
+        fleet_medic_expand_threshold: 99
+        fleet_medic_expand_fail_on: never
+
+    - name: Hygiene dry run
+      ansible.builtin.include_role:
+        name: disk_hygiene
+      vars:
+        fleet_medic_hygiene_dry_run: true
+        fleet_medic_hygiene_recycle_bin: false
+        fleet_medic_hygiene_fail_on: never
+
+    - name: Patch check mode with a command gate
+      ansible.builtin.include_role:
+        name: patch_reboot
+      vars:
+        fleet_medic_patch_check_mode: true
+        fleet_medic_patch_reboot: never
+        fleet_medic_health_systemd_degraded: false
+        fleet_medic_health_override:
+          command: cmd /c exit 0
+        fleet_medic_patch_fail_on: never
+
+    - name: Assert the three reports exist
+      ansible.builtin.assert:
+        that:
+          - fleet_medic_expand_result.mounts | length >= 1
+          - fleet_medic_hygiene_result.actions | length >= 1
+          - fleet_medic_patch_result.gates | select('match', '.*') is defined
+        fail_msg: "windows: {{ fleet_medic_expand_result }} / {{ fleet_medic_hygiene_result }} / {{ fleet_medic_patch_result }}"

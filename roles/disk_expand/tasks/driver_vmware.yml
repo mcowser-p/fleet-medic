@@ -1,0 +1,39 @@
+---
+- name: "Grow the VMware disk for {{ _disk_expand_mount }}"
+  vars:
+    _map: "{{ fleet_medic_expand_scsi_map.get(_de_disk | basename, {'controller': 0, 'unit': 0}) }}"
+  community.vmware.vmware_guest_disk:
+    hostname: "{{ fleet_medic_expand_vcenter_hostname }}"
+    username: "{{ fleet_medic_expand_vcenter_username }}"
+    password: "{{ fleet_medic_expand_vcenter_password }}"
+    validate_certs: "{{ fleet_medic_expand_vcenter_validate_certs }}"
+    name: "{{ fleet_medic_expand_vm_name }}"
+    disk:
+      - scsi_controller: "{{ _map.controller }}"
+        unit_number: "{{ _map.unit }}"
+        size_gb: "{{ _de_target_gib | int }}"
+        state: present
+  delegate_to: localhost
+  become: false
+  register: _disk_expand_vmdk
+  failed_when: false
+
+- name: "Classify the VMware outcome"
+  when: _disk_expand_vmdk.failed | default(false)
+  ansible.builtin.set_fact:
+    _de_reason: cloud_api_denied
+    _de_reason_detail: "vCenter disk grow failed: {{ _disk_expand_vmdk.msg | default('unknown') }}"
+
+- name: "Rescan and wait for the new size of {{ _de_disk }}"
+  when: _de_reason | default('') | length == 0
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      for h in /sys/class/scsi_host/host*/scan; do echo '- - -' > "$h" 2>/dev/null || true; done
+      echo 1 > /sys/class/block/$(basename '{{ _de_disk }}')/device/rescan 2>/dev/null || true
+      lsblk -bdno SIZE '{{ _de_disk }}'
+  register: _disk_expand_vmsize
+  changed_when: false
+  retries: 12
+  delay: 10
+  until: (_disk_expand_vmsize.stdout | trim | int) >= (_de_target_gib | int * 1073741824)

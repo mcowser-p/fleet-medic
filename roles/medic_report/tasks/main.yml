@@ -1,0 +1,70 @@
+---
+- name: Post the Datadog event
+  when: medic_report_datadog_api_key | length > 0
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  ansible.builtin.uri:
+    url: "{{ medic_report_datadog_url }}/api/v1/events"
+    method: POST
+    headers:
+      DD-API-KEY: "{{ medic_report_datadog_api_key }}"
+    body_format: json
+    body:
+      title: >-
+        fleet-medic {{ medic_report_source }} on {{ inventory_hostname }}:
+        {{ medic_report_outcome | upper }}
+      text: |-
+        %%%
+        **{{ medic_report_source }}** on `{{ inventory_hostname }}` — **{{ medic_report_outcome }}**
+        {% if medic_report_reasons | length > 0 %}
+        reasons: {{ medic_report_reasons | join(', ') }}
+        {% endif %}
+        ```
+        {{ medic_report_payload | to_nice_yaml(indent=2) }}
+        ```
+        %%%
+      alert_type: "{{ 'error' if medic_report_outcome == 'fail' else 'success' }}"
+      tags:
+        - "fleet_medic:{{ medic_report_source }}"
+        - "outcome:{{ medic_report_outcome }}"
+        - "host:{{ inventory_hostname }}"
+        - "reasons:{{ medic_report_reasons | join('|') if medic_report_reasons | length > 0 else 'none' }}"
+    status_code: [200, 202]
+  register: _medic_report_dd
+  failed_when: false
+
+- name: Warn when the event could not be posted
+  when:
+    - medic_report_datadog_api_key | length > 0
+    - _medic_report_dd.status | default(0) not in [200, 202]
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: Datadog event post failed
+      (status {{ _medic_report_dd.status | default('none') }}) — the run
+      result is unaffected.
+
+- name: Write the report file (linux)
+  when:
+    - medic_report_file | length > 0
+    - ansible_os_family != 'Windows'
+  ansible.builtin.copy:
+    content: "{{ {'source': medic_report_source, 'outcome': medic_report_outcome, 'reasons': medic_report_reasons, 'report': medic_report_payload} | to_nice_yaml(indent=2) }}"
+    dest: "{{ medic_report_file }}"
+    mode: "0644"
+
+- name: Write the report file (windows)
+  when:
+    - medic_report_file | length > 0
+    - ansible_os_family == 'Windows'
+  ansible.windows.win_copy:
+    content: "{{ {'source': medic_report_source, 'outcome': medic_report_outcome, 'reasons': medic_report_reasons, 'report': medic_report_payload} | to_nice_yaml(indent=2) }}"
+    dest: "{{ medic_report_file }}"
+
+- name: Enforce the failure policy
+  ansible.builtin.assert:
+    that: medic_report_fail_on == 'never' or medic_report_outcome != 'fail'
+    fail_msg: >-
+      {{ medic_report_source }} FAILED on {{ inventory_hostname }}:
+      {{ medic_report_reasons | join(', ') }}
+    success_msg: "{{ medic_report_source }}: {{ medic_report_outcome }}"

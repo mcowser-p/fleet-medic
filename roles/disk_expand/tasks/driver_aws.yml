@@ -1,0 +1,62 @@
+---
+- name: "Discover the EBS volume behind {{ _de_disk }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      tok=$(curl -sS -X PUT http://169.254.169.254/latest/api/token \
+        -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null)
+      echo "REGION=$(curl -sS -H "X-aws-ec2-metadata-token: $tok" \
+        http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null)"
+      dname=$(basename '{{ _de_disk }}')
+      vol=$(readlink -f /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol* 2>/dev/null \
+        | paste -d' ' <(ls /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol* 2>/dev/null) - \
+        | awk -v d="/dev/$dname" '$2 == d {print $1}' | head -1 \
+        | grep -oE 'vol[0-9a-f]+' | sed 's/^vol/vol-/')
+      echo "VOLUME=${vol:-}"
+  register: _disk_expand_awsmeta
+  changed_when: false
+
+- name: "Grow the EBS volume for {{ _disk_expand_mount }}"
+  vars:
+    _vol: "{{ (_disk_expand_awsmeta.stdout_lines | select('match', '^VOLUME=') | first | default('VOLUME=')).split('=', 1) | last }}"
+    _region: "{{ (_disk_expand_awsmeta.stdout_lines | select('match', '^REGION=') | first | default('REGION=')).split('=', 1) | last }}"
+  when: _vol | length > 0
+  amazon.aws.ec2_vol:
+    id: "{{ _vol }}"
+    region: "{{ _region }}"
+    volume_size: "{{ _de_target_gib | int }}"
+    modify_volume: true
+  delegate_to: localhost
+  become: false
+  register: _disk_expand_ebs
+  failed_when: false
+
+- name: "Classify the EBS outcome"
+  vars:
+    _vol: "{{ (_disk_expand_awsmeta.stdout_lines | select('match', '^VOLUME=') | first | default('VOLUME=')).split('=', 1) | last }}"
+    _msg: "{{ _disk_expand_ebs.msg | default('') }}"
+  ansible.builtin.set_fact:
+    _de_reason: >-
+      {{ '' if _vol | length > 0 and not (_disk_expand_ebs.failed | default(false))
+         else ('ebs_cooldown' if 'ModificationRateExceeded' in _msg or 'IncorrectModificationState' in _msg
+               else ('cloud_api_denied' if _vol | length > 0 else 'cloud_api_denied')) }}
+    _de_reason_detail: >-
+      {{ '' if _vol | length > 0 and not (_disk_expand_ebs.failed | default(false))
+         else ('EBS allows one size modification per ~6h — retry later: ' ~ _msg
+               if 'ModificationRateExceeded' in _msg or 'IncorrectModificationState' in _msg
+               else ('could not map ' ~ _de_disk ~ ' to an EBS volume' if _vol | length == 0
+                     else 'EBS modify failed: ' ~ _msg)) }}
+
+- name: "Wait for the kernel to see the new size of {{ _de_disk }}"
+  when: _de_reason | default('') | length == 0
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      echo 1 > /sys/class/block/$(basename '{{ _de_disk }}')/device/rescan 2>/dev/null || true
+      lsblk -bdno SIZE '{{ _de_disk }}'
+  register: _disk_expand_newsize
+  changed_when: false
+  retries: 12
+  delay: 10
+  until: (_disk_expand_newsize.stdout | trim | int) >= (_de_target_gib | int * 1073741824)

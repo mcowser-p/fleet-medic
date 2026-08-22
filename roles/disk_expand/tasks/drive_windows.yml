@@ -1,0 +1,65 @@
+---
+# One windows drive letter: measure, optionally hygiene, then extend the
+# partition to the maximum the (possibly driver-grown) disk supports.
+
+- name: "Measure drive {{ _disk_expand_drive }}"
+  ansible.windows.win_shell: |
+    $d = Get-PSDrive '{{ _disk_expand_drive }}'
+    $pct = [math]::Round(($d.Used / ($d.Used + $d.Free)) * 100)
+    $part = Get-Partition -DriveLetter '{{ _disk_expand_drive }}'
+    $max = (Get-PartitionSupportedSize -DriveLetter '{{ _disk_expand_drive }}').SizeMax
+    @{pct = $pct; size = [long]$part.Size; max = [long]$max} | ConvertTo-Json
+  register: _disk_expand_win
+  changed_when: false
+
+- name: "Evaluate drive {{ _disk_expand_drive }}"
+  vars:
+    _w: "{{ _disk_expand_win.stdout | from_json }}"
+    _headroom: "{{ (_w.max | int) - (_w.size | int) > 1073741824 }}"
+  ansible.builtin.set_fact:
+    _de_win_pct: "{{ _w.pct | int }}"
+    _de_win_headroom: "{{ _headroom }}"
+
+- name: "Below threshold — record ok for {{ _disk_expand_drive }}"
+  when: _de_win_pct | int < fleet_medic_expand_threshold | int
+  ansible.builtin.set_fact:
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result
+         | combine({'mounts': fleet_medic_expand_result.mounts + [{
+              'mount': _disk_expand_drive ~ ':', 'status': 'ok', 'reason': '',
+              'usage_pct': _de_win_pct | int,
+              'detail': 'usage ' ~ _de_win_pct ~ '% < threshold'}]}) }}
+
+- name: "Extend drive {{ _disk_expand_drive }}"
+  when:
+    - _de_win_pct | int >= fleet_medic_expand_threshold | int
+    - not fleet_medic_expand_dry_run
+  ansible.windows.win_shell: |
+    Update-HostStorageCache
+    $max = (Get-PartitionSupportedSize -DriveLetter '{{ _disk_expand_drive }}').SizeMax
+    $part = Get-Partition -DriveLetter '{{ _disk_expand_drive }}'
+    if ($max - $part.Size -gt 1GB) {
+      Resize-Partition -DriveLetter '{{ _disk_expand_drive }}' -Size $max
+      "RESIZED"
+    } else {
+      "NO_HEADROOM"
+    }
+  register: _disk_expand_winresize
+  changed_when: "'RESIZED' in _disk_expand_winresize.stdout"
+
+- name: "Record drive {{ _disk_expand_drive }}"
+  when: _de_win_pct | int >= fleet_medic_expand_threshold | int
+  vars:
+    _resized: "{{ 'RESIZED' in (_disk_expand_winresize.stdout | default('')) }}"
+  ansible.builtin.set_fact:
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result
+         | combine({'mounts': fleet_medic_expand_result.mounts + [{
+              'mount': _disk_expand_drive ~ ':',
+              'status': ('dry_run' if fleet_medic_expand_dry_run
+                         else ('resolved_by_disk' if _resized else 'fail')),
+              'reason': '' if _resized or fleet_medic_expand_dry_run else 'vg_exhausted_no_driver',
+              'usage_pct': _de_win_pct | int,
+              'detail': ('partition extended to the disk maximum' if _resized
+                         else 'no headroom on the disk — grow the virtual disk first (driver: '
+                              ~ _disk_expand_driver ~ ')')}]}) }}

@@ -1,0 +1,5 @@
+---
+collections:
+  - name: ansible.windows
+  - name: amazon.aws
+  - name: community.vmware

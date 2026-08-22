@@ -1,0 +1,20 @@
+---
+galaxy_info:
+  namespace: mcowser_p
+  role_name: patch_reboot
+  author: mcowser-p
+  description: >-
+    Patch and reboot orchestration for Linux and Windows with per-host
+    health gates (systemd state, services, http checks, custom command)
+    sourced from hostvars, an on-host gate file, or launch-time override
+  license: Apache-2.0
+  min_ansible_version: '2.16'
+  platforms:
+    - name: EL
+      versions: ['9', '10']
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Windows
+      versions: ['2022']
+  galaxy_tags: [patching, maintenance, windows, linux]
+dependencies: []

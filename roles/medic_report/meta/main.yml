@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  namespace: mcowser_p
+  role_name: medic_report
+  author: mcowser-p
+  description: Shared reporter - Datadog event, report file, failure policy
+  license: Apache-2.0
+  min_ansible_version: '2.16'
+  platforms:
+    - name: EL
+      versions: ['9', '10']
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Windows
+      versions: ['2022']
+  galaxy_tags: [monitoring, reporting]
+dependencies: []

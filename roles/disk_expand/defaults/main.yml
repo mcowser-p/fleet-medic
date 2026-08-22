@@ -1,0 +1,44 @@
+---
+# defaults for mcowser_p.fleet_medic.disk_expand
+# Threshold-driven, guard-railed disk expansion. Sweep model: the role
+# evaluates every candidate mount; a Datadog->Ascender trigger only
+# needs to name the host. Nothing here is org-specific.
+
+# Mounts to evaluate. Empty = every real local filesystem (tmpfs,
+# overlay, squashfs, iso9660 and /boot* are excluded automatically).
+fleet_medic_expand_mounts: []
+fleet_medic_expand_threshold: 80          # usage % that triggers action
+
+# The size ladder (GiB): a grow always targets the next step above the
+# current size. The hard cap is the #1 guardrail — Datadog will happily
+# re-trigger forever.
+fleet_medic_expand_steps_gib: [50, 100, 150, 200, 300, 500, 750, 1000]
+fleet_medic_expand_max_gib: 1000
+fleet_medic_expand_max_gib_per_mount: {}  # e.g. {/var/lib/pgsql: 2000}
+
+# Try reclaiming space before spending money (invokes disk_hygiene
+# armed, then re-measures).
+fleet_medic_expand_hygiene_first: true
+
+# Infrastructure driver: auto (DMI vendor detect) | aws | vmware | none
+# (none = the disk was grown out-of-band; do the OS layer only).
+fleet_medic_expand_driver: auto
+
+# vmware driver
+fleet_medic_expand_vcenter_hostname: ""
+fleet_medic_expand_vcenter_username: ""
+fleet_medic_expand_vcenter_password: ""
+fleet_medic_expand_vcenter_validate_certs: true
+fleet_medic_expand_vm_name: "{{ inventory_hostname }}"
+# disk selection for multi-disk VMs: {<linux disk name>: {controller: 0, unit: 0}}
+fleet_medic_expand_scsi_map: {}
+
+# windows: drive letters to manage (single partition per drive)
+fleet_medic_expand_windows_drives: [C]
+
+fleet_medic_expand_dry_run: false
+
+# Reporting (passed through to medic_report)
+fleet_medic_expand_datadog_api_key: ""
+fleet_medic_expand_report_file: ""
+fleet_medic_expand_fail_on: fail

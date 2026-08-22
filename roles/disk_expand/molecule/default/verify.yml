@@ -1,0 +1,18 @@
+---
+- name: Verify
+  hosts: all
+  tasks:
+    - name: The grown mounts hold their sizes
+      ansible.builtin.include_role:
+        name: disk_expand
+      vars:
+        fleet_medic_expand_mounts: [/mnt/plain, /mnt/lvm]
+        fleet_medic_expand_hygiene_first: false
+        fleet_medic_expand_driver: none
+        fleet_medic_expand_fail_on: never
+
+    - name: Both stay ok
+      ansible.builtin.assert:
+        that:
+          - fleet_medic_expand_result.mounts | selectattr('status', 'eq', 'ok') | list | length == 2
+        fail_msg: "{{ fleet_medic_expand_result }}"

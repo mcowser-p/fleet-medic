@@ -1,0 +1,53 @@
+---
+- name: "HTTP gate (linux) — {{ _patch_reboot_gate_http.url }}"
+  when: ansible_os_family != 'Windows'
+  ansible.builtin.uri:
+    url: "{{ _patch_reboot_gate_http.url }}"
+    status_code: "{{ _patch_reboot_gate_http.status_code | default([200]) }}"
+    validate_certs: "{{ _patch_reboot_gate_http.validate_certs | default(true) }}"
+    return_content: true
+  register: _patch_reboot_http_lin
+  failed_when: false
+  retries: "{{ fleet_medic_health_retries }}"
+  delay: "{{ fleet_medic_health_delay }}"
+  until: >-
+    _patch_reboot_http_lin.status | default(0)
+    in (_patch_reboot_gate_http.status_code | default([200]) | map('int') | list)
+
+- name: "HTTP gate (windows) — {{ _patch_reboot_gate_http.url }}"
+  when: ansible_os_family == 'Windows'
+  ansible.windows.win_uri:
+    url: "{{ _patch_reboot_gate_http.url }}"
+    status_code: "{{ _patch_reboot_gate_http.status_code | default([200]) }}"
+    validate_certs: "{{ _patch_reboot_gate_http.validate_certs | default(true) }}"
+    return_content: true
+  register: _patch_reboot_http_win
+  failed_when: false
+  retries: "{{ fleet_medic_health_retries }}"
+  delay: "{{ fleet_medic_health_delay }}"
+  until: >-
+    _patch_reboot_http_win.status_code | default(0)
+    in (_patch_reboot_gate_http.status_code | default([200]) | map('int') | list)
+
+- name: "Record the http gate — {{ _patch_reboot_gate_http.url }}"
+  vars:
+    _r: "{{ _patch_reboot_http_lin if ansible_os_family != 'Windows' else _patch_reboot_http_win }}"
+    _status: "{{ _r.status | default(_r.status_code) | default(0) }}"
+    _body: "{{ _r.content | default('') }}"
+    _status_ok: >-
+      {{ _status | int in (_patch_reboot_gate_http.status_code | default([200]) | map('int') | list) }}
+    _contains_ok: >-
+      {{ true if _patch_reboot_gate_http.contains is not defined
+         else (_body is search(_patch_reboot_gate_http.contains)) }}
+    _ok: "{{ _status_ok and _contains_ok }}"
+  ansible.builtin.set_fact:
+    fleet_medic_patch_result: >-
+      {{ fleet_medic_patch_result
+         | combine({'gates': fleet_medic_patch_result.gates + [{
+              'name': 'http:' ~ _patch_reboot_gate_http.url,
+              'phase': _patch_reboot_gate_phase,
+              'status': 'ok' if _ok else 'fail',
+              'detail': 'status ' ~ _status
+                        ~ ('' if _contains_ok else ', body missing: ' ~ _patch_reboot_gate_http.contains | default(''))}],
+            'reasons': fleet_medic_patch_result.reasons
+              + ([] if _ok else ['gate_failed:http:' ~ _patch_reboot_gate_http.url])}) }}

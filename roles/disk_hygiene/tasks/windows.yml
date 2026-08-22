@@ -1,0 +1,39 @@
+---
+- name: Windows cleanup
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'SilentlyContinue'
+    $dry = ${{ fleet_medic_hygiene_dry_run | bool | lower }}
+    $before = (Get-PSDrive C).Free
+    $would = 0
+    if (${{ fleet_medic_hygiene_windows_temp | bool | lower }}) {
+      $cutoff = (Get-Date).AddDays(-{{ fleet_medic_hygiene_windows_temp_age_days }})
+      foreach ($dir in @($env:TEMP, "$env:SystemRoot\Temp")) {
+        $files = Get-ChildItem -Path $dir -Recurse -File | Where-Object LastWriteTime -lt $cutoff
+        $would += ($files | Measure-Object Length -Sum).Sum
+        if (-not $dry) { $files | Remove-Item -Force }
+      }
+    }
+    if (${{ fleet_medic_hygiene_recycle_bin | bool | lower }} -and -not $dry) {
+      Clear-RecycleBin -Force
+    }
+    if (${{ fleet_medic_hygiene_component_cleanup | bool | lower }} -and -not $dry) {
+      Dism.exe /Online /Cleanup-Image /StartComponentCleanup /Quiet | Out-Null
+    }
+    $after = (Get-PSDrive C).Free
+    @{freed = [long]($after - $before); would_free = [long]$would} | ConvertTo-Json
+  register: _disk_hygiene_win
+  changed_when: not fleet_medic_hygiene_dry_run
+
+- name: Record the windows action
+  vars:
+    _parsed: "{{ _disk_hygiene_win.stdout | from_json }}"
+  ansible.builtin.set_fact:
+    fleet_medic_hygiene_result: >-
+      {{ fleet_medic_hygiene_result
+         | combine({'actions': fleet_medic_hygiene_result.actions
+              + [{'target': 'windows_temp',
+                  'freed_bytes': _parsed.freed | int,
+                  'detail': ('would free ' ~ _parsed.would_free ~ ' bytes (dry run)')
+                            if fleet_medic_hygiene_dry_run
+                            else (_parsed.freed | string) ~ ' bytes freed'}],
+            'total_freed_bytes': fleet_medic_hygiene_result.total_freed_bytes | int + _parsed.freed | int}) }}

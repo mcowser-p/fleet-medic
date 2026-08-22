@@ -1,0 +1,233 @@
+---
+- name: Converge
+  hosts: all
+  vars:
+    _steps: [1, 2, 3, 4, 5]
+  tasks:
+    # ------------------------------------------------------- S1: LV step
+    - name: S1 — free VG space resolves /mnt/lvm
+      ansible.builtin.include_role:
+        name: disk_expand
+      vars:
+        fleet_medic_expand_mounts: [/mnt/lvm]
+        fleet_medic_expand_steps_gib: "{{ _steps }}"
+        fleet_medic_expand_max_gib: 5
+        fleet_medic_expand_hygiene_first: false
+        fleet_medic_expand_driver: none
+        fleet_medic_expand_fail_on: never
+
+    - name: Assert S1
+      vars:
+        _m: "{{ fleet_medic_expand_result.mounts | first }}"
+      ansible.builtin.assert:
+        that:
+          - _m.status == 'resolved_by_lv'
+          - _m.usage_pct | int < 80
+        fail_msg: "S1: {{ fleet_medic_expand_result }}"
+
+    # -------------------------------------------- S2: disk grow (plain)
+    - name: S2 — simulate the infra growing diskA
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -e
+          truncate -s 3G /opt/medic/diskA.img
+          losetup -c "$(cat /opt/medic/loopA)"
+      changed_when: true
+
+    - name: S2 — grow /mnt/plain through the OS chain
+      ansible.builtin.include_role:
+        name: disk_expand
+      vars:
+        fleet_medic_expand_mounts: [/mnt/plain]
+        fleet_medic_expand_steps_gib: "{{ _steps }}"
+        fleet_medic_expand_max_gib: 5
+        fleet_medic_expand_hygiene_first: false
+        fleet_medic_expand_driver: none
+        fleet_medic_expand_fail_on: never
+
+    - name: Assert S2
+      vars:
+        _m: "{{ fleet_medic_expand_result.mounts | first }}"
+      ansible.builtin.assert:
+        that:
+          - _m.status == 'resolved_by_disk'
+          - _m.usage_pct | int < 80
+        fail_msg: "S2: {{ fleet_medic_expand_result }}"
+
+    # ------------------------------------------- S3: max_size_reached
+    - name: S3 — the cap blocks /mnt/small
+      ansible.builtin.include_role:
+        name: disk_expand
+      vars:
+        fleet_medic_expand_mounts: [/mnt/small]
+        fleet_medic_expand_steps_gib: "{{ _steps }}"
+        fleet_medic_expand_max_gib: 1
+        fleet_medic_expand_hygiene_first: false
+        fleet_medic_expand_driver: none
+        fleet_medic_expand_fail_on: never
+
+    - name: Assert S3
+      vars:
+        _m: "{{ fleet_medic_expand_result.mounts | first }}"
+      ansible.builtin.assert:
+        that:
+          - _m.status == 'fail'
+          - _m.reason == 'max_size_reached'
+        fail_msg: "S3: {{ fleet_medic_expand_result }}"
+
+    # -------------------------------------- S4: partition_not_growable
+    - name: S4 — grow diskE so headroom exists
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -e
+          truncate -s 3G /opt/medic/diskE.img
+          losetup -c "$(cat /opt/medic/loopE)"
+      changed_when: true
+
+    - name: S4 — the middle partition cannot grow
+      ansible.builtin.include_role:
+        name: disk_expand
+      vars:
+        fleet_medic_expand_mounts: [/mnt/mid]
+        fleet_medic_expand_steps_gib: "{{ _steps }}"
+        fleet_medic_expand_max_gib: 5
+        fleet_medic_expand_hygiene_first: false
+        fleet_medic_expand_driver: none
+        fleet_medic_expand_fail_on: never
+
+    - name: Assert S4
+      vars:
+        _m: "{{ fleet_medic_expand_result.mounts | first }}"
+      ansible.builtin.assert:
+        that:
+          - _m.status == 'fail'
+          - _m.reason == 'partition_not_growable'
+        fail_msg: "S4: {{ fleet_medic_expand_result }}"
+
+    # ------------------------------------------------------ S5: dry run
+    - name: S5 — dry run on /mnt/small
+      ansible.builtin.include_role:
+        name: disk_expand
+      vars:
+        fleet_medic_expand_mounts: [/mnt/small]
+        fleet_medic_expand_steps_gib: "{{ _steps }}"
+        fleet_medic_expand_max_gib: 5
+        fleet_medic_expand_hygiene_first: false
+        fleet_medic_expand_driver: none
+        fleet_medic_expand_dry_run: true
+        fleet_medic_expand_fail_on: never
+
+    - name: Assert S5
+      vars:
+        _m: "{{ fleet_medic_expand_result.mounts | first }}"
+      ansible.builtin.assert:
+        that: _m.status == 'dry_run'
+        fail_msg: "S5: {{ fleet_medic_expand_result }}"
+
+    # ------------------------------------------------------ S6: hygiene
+    - name: S6a — hygiene dry run
+      ansible.builtin.include_role:
+        name: disk_hygiene
+      vars:
+        fleet_medic_hygiene_dry_run: true
+        fleet_medic_hygiene_journald: false
+        fleet_medic_hygiene_old_kernels: false
+        fleet_medic_hygiene_package_cache: false
+        fleet_medic_hygiene_paths:
+          - {path: /var/medic-old, age_days: 30, pattern: '*.log'}
+        fleet_medic_hygiene_fail_on: never
+
+    - name: Assert S6a
+      vars:
+        _a: "{{ fleet_medic_hygiene_result.actions | selectattr('target', 'eq', 'path:/var/medic-old') | first }}"
+      ansible.builtin.assert:
+        that:
+          - fleet_medic_hygiene_result.total_freed_bytes | int == 0
+          - "'20 files' in _a.detail"
+        fail_msg: "S6a: {{ fleet_medic_hygiene_result }}"
+
+    - name: S6b — hygiene armed
+      ansible.builtin.include_role:
+        name: disk_hygiene
+      vars:
+        fleet_medic_hygiene_dry_run: false
+        fleet_medic_hygiene_journald: false
+        fleet_medic_hygiene_old_kernels: false
+        fleet_medic_hygiene_package_cache: false
+        fleet_medic_hygiene_paths:
+          - {path: /var/medic-old, age_days: 30, pattern: '*.log'}
+        fleet_medic_hygiene_fail_on: never
+
+    - name: Assert S6b — files actually gone
+      ansible.builtin.find:
+        paths: /var/medic-old
+        patterns: '*.log'
+      register: _leftover
+
+    - name: Assert S6b outcome
+      ansible.builtin.assert:
+        that: _leftover.files | length == 0
+        fail_msg: "S6b left files: {{ _leftover.files | map(attribute='path') | list }}"
+
+    # -------------------------------------------------------- S7: gates
+    - name: S7a — the on-host gate file fails the command gate
+      ansible.builtin.include_role:
+        name: patch_reboot
+      vars:
+        fleet_medic_patch_check_mode: true
+        fleet_medic_patch_reboot: never
+        fleet_medic_health_systemd_degraded: false
+        fleet_medic_patch_fail_on: never
+
+    - name: Assert S7a
+      ansible.builtin.assert:
+        that:
+          - fleet_medic_patch_result.reasons | select('match', '^gate_failed:command') | list | length > 0
+        fail_msg: "S7a: {{ fleet_medic_patch_result }}"
+
+    - name: S7b — the launch override wins over the file
+      ansible.builtin.include_role:
+        name: patch_reboot
+      vars:
+        fleet_medic_patch_check_mode: true
+        fleet_medic_patch_reboot: never
+        fleet_medic_health_systemd_degraded: false
+        fleet_medic_health_override:
+          command: /bin/true
+        fleet_medic_patch_fail_on: never
+
+    - name: Assert S7b
+      ansible.builtin.assert:
+        that:
+          - fleet_medic_patch_result.reasons | select('match', '^gate_failed') | list | length == 0
+        fail_msg: "S7b: {{ fleet_medic_patch_result }}"
+
+    # ------------------------------------------------- S8: Datadog mock
+    - name: S8 — report to the mock
+      ansible.builtin.include_role:
+        name: disk_hygiene
+      vars:
+        fleet_medic_hygiene_dry_run: true
+        fleet_medic_hygiene_journald: false
+        fleet_medic_hygiene_old_kernels: false
+        fleet_medic_hygiene_package_cache: false
+        fleet_medic_hygiene_datadog_api_key: test-key
+        fleet_medic_hygiene_fail_on: never
+        medic_report_datadog_url: http://127.0.0.1:8125
+
+    - name: Read the captured events
+      ansible.builtin.slurp:
+        src: /opt/medic/dd-events.jsonl
+      register: _dd_capture
+
+    - name: Assert S8 — the event carries the right shape
+      vars:
+        _events: "{{ _dd_capture.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'disk_hygiene' in _events"
+          - "'outcome:ok' in _events"
+          - "'fleet_medic:disk_hygiene' in _events"
+        fail_msg: "S8: {{ _events[:400] }}"

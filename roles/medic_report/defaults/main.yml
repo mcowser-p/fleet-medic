@@ -1,0 +1,10 @@
+---
+# defaults for mcowser_p.fleet_medic.medic_report — the shared reporter.
+medic_report_source: fleet-medic     # which role produced this report
+medic_report_outcome: ok             # ok | fail
+medic_report_reasons: []             # failure-taxonomy codes
+medic_report_payload: {}             # role-specific report dict
+medic_report_datadog_api_key: ""     # empty = skip the Datadog event
+medic_report_datadog_url: https://api.datadoghq.com
+medic_report_file: ""                # optional YAML report on the target
+medic_report_fail_on: fail           # fail | never

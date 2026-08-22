@@ -1,0 +1,15 @@
+---
+- name: Reboot (linux)
+  when: ansible_os_family != 'Windows'
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ fleet_medic_patch_reboot_timeout }}"
+
+- name: Reboot (windows)
+  when: ansible_os_family == 'Windows'
+  ansible.windows.win_reboot:
+    reboot_timeout: "{{ fleet_medic_patch_reboot_timeout }}"
+
+- name: Record the reboot
+  ansible.builtin.set_fact:
+    fleet_medic_patch_result: >-
+      {{ fleet_medic_patch_result | combine({'rebooted': true}) }}

@@ -1,0 +1,116 @@
+---
+# Grow the physical disk (driver), then the partition, LVM layer, and
+# filesystem. Sets _de_done / _de_reason accordingly.
+
+- name: "Guardrail — the cap for {{ _disk_expand_mount }}"
+  when: _de_target_gib | int == 0
+  ansible.builtin.set_fact:
+    _de_reason: max_size_reached
+    _de_reason_detail: >-
+      disk is {{ _de_disk_gib }}GiB; no ladder step fits under the
+      {{ _de_cap_gib }}GiB cap
+
+- name: "Guardrail — partition position for {{ _disk_expand_mount }}"
+  when:
+    - _de_target_gib | int > 0
+    - not _de_last
+  ansible.builtin.set_fact:
+    _de_reason: partition_not_growable
+    _de_reason_detail: >-
+      {{ _de_part }} is not the last partition on {{ _de_disk }} —
+      cannot grow in place
+
+- name: "Dry run — would grow {{ _disk_expand_mount }}"
+  when:
+    - _de_target_gib | int > 0
+    - _de_last
+    - fleet_medic_expand_dry_run
+  ansible.builtin.set_fact:
+    _de_done: true
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result
+         | combine({'mounts': fleet_medic_expand_result.mounts + [{
+              'mount': _disk_expand_mount, 'status': 'dry_run', 'reason': '',
+              'usage_pct': _de_pct | int,
+              'detail': 'would grow ' ~ _de_disk ~ ' ' ~ _de_disk_gib ~ 'GiB -> '
+                        ~ _de_target_gib ~ 'GiB via ' ~ _disk_expand_driver}]}) }}
+
+- name: "Grow the disk for {{ _disk_expand_mount }}"
+  when:
+    - _de_target_gib | int > 0
+    - _de_last
+    - not fleet_medic_expand_dry_run
+  block:
+    - name: "Driver grow (aws)"
+      when: _disk_expand_driver == 'aws'
+      ansible.builtin.include_tasks: driver_aws.yml
+
+    - name: "Driver grow (vmware)"
+      when: _disk_expand_driver == 'vmware'
+      ansible.builtin.include_tasks: driver_vmware.yml
+
+    # driver none: the disk was grown out-of-band (or a test fixture) —
+    # proceed straight to the OS layer.
+
+    - name: "Grow the partition on {{ _de_disk }}"
+      when: _de_reason | default('') | length == 0
+      ansible.builtin.command:
+        argv: [growpart, "{{ _de_disk }}", "{{ _de_partnum }}"]
+      register: _disk_expand_growpart
+      changed_when: _disk_expand_growpart.rc == 0
+      failed_when: >-
+        _disk_expand_growpart.rc != 0
+        and 'NOCHANGE' not in _disk_expand_growpart.stdout | default('')
+
+    - name: "Resize the PV for {{ _disk_expand_mount }}"
+      when:
+        - _de_reason | default('') | length == 0
+        - _de_kind == 'lvm'
+      ansible.builtin.command:
+        argv: [pvresize, "{{ _de_part }}"]
+      changed_when: true
+
+    - name: "Extend the LV for {{ _disk_expand_mount }}"
+      when:
+        - _de_reason | default('') | length == 0
+        - _de_kind == 'lvm'
+      ansible.builtin.command:
+        argv: [lvextend, -l, "+100%FREE", "{{ _de_lv }}"]
+      register: _disk_expand_lvx2
+      changed_when: _disk_expand_lvx2.rc == 0
+      failed_when: false
+
+    - name: "Grow the filesystem on {{ _disk_expand_mount }}"
+      when: _de_reason | default('') | length == 0
+      ansible.builtin.include_tasks: fs_grow.yml
+
+    - name: "Re-measure {{ _disk_expand_mount }} after the disk grow"
+      ansible.builtin.command:
+        argv: [df, --output=pcent, "{{ _disk_expand_mount }}"]
+      register: _disk_expand_dpct
+      changed_when: false
+
+    - name: "Disk grow resolved {{ _disk_expand_mount }}"
+      vars:
+        _now: "{{ _disk_expand_dpct.stdout_lines | last | trim | replace('%', '') | int }}"
+      when:
+        - _de_reason | default('') | length == 0
+        - _now | int < fleet_medic_expand_threshold | int
+      ansible.builtin.set_fact:
+        _de_pct: "{{ _now }}"
+        _de_done: true
+        fleet_medic_expand_result: >-
+          {{ fleet_medic_expand_result
+             | combine({'mounts': fleet_medic_expand_result.mounts + [{
+                  'mount': _disk_expand_mount, 'status': 'resolved_by_disk', 'reason': '',
+                  'usage_pct': _now | int,
+                  'detail': _de_disk ~ ' grown to ' ~ _de_target_gib ~ 'GiB via '
+                            ~ _disk_expand_driver ~ ' -> usage ' ~ _now ~ '%'}]}) }}
+
+    - name: "Still over threshold on {{ _disk_expand_mount }}"
+      when:
+        - _de_reason | default('') | length == 0
+        - _de_done | default(false) == false
+      ansible.builtin.set_fact:
+        _de_reason: no_free_space_after_grow
+        _de_reason_detail: "grew to {{ _de_target_gib }}GiB but usage is still over threshold"

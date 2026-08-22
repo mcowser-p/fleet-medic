@@ -1,0 +1,31 @@
+---
+- name: Initialize the hygiene result
+  ansible.builtin.set_fact:
+    fleet_medic_hygiene_result:
+      dry_run: "{{ fleet_medic_hygiene_dry_run | bool }}"
+      actions: []
+      total_freed_bytes: 0
+      largest_dirs: {}
+
+- name: Run linux hygiene
+  ansible.builtin.include_tasks: linux.yml
+  when: ansible_os_family != 'Windows'
+
+- name: Run windows hygiene
+  ansible.builtin.include_tasks: windows.yml
+  when: ansible_os_family == 'Windows'
+
+- name: Scan the largest directories
+  ansible.builtin.include_tasks: scan.yml
+  when: fleet_medic_hygiene_scan_mounts | length > 0
+
+- name: Report
+  ansible.builtin.include_role:
+    name: medic_report
+  vars:
+    medic_report_source: disk_hygiene
+    medic_report_outcome: ok
+    medic_report_payload: "{{ fleet_medic_hygiene_result }}"
+    medic_report_datadog_api_key: "{{ fleet_medic_hygiene_datadog_api_key }}"
+    medic_report_file: "{{ fleet_medic_hygiene_report_file }}"
+    medic_report_fail_on: "{{ fleet_medic_hygiene_fail_on }}"

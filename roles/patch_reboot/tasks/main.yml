@@ -1,0 +1,50 @@
+---
+- name: Initialize the patch result
+  ansible.builtin.set_fact:
+    fleet_medic_patch_result:
+      updates: 0
+      reboot_needed: false
+      rebooted: false
+      gates: []
+      reasons: []
+
+- name: Assemble the health gates
+  ansible.builtin.include_tasks: gates_load.yml
+
+- name: Pre-patch baseline gates
+  when: fleet_medic_health_pre_check
+  ansible.builtin.include_tasks: gates_run.yml
+  vars:
+    _patch_reboot_gate_phase: pre
+
+- name: Patch (linux)
+  when: ansible_os_family != 'Windows'
+  ansible.builtin.include_tasks: patch_linux.yml
+
+- name: Patch (windows)
+  when: ansible_os_family == 'Windows'
+  ansible.builtin.include_tasks: patch_windows.yml
+
+- name: Reboot when the policy says so
+  when:
+    - not fleet_medic_patch_check_mode
+    - fleet_medic_patch_reboot == 'always'
+      or (fleet_medic_patch_reboot == 'if_needed' and fleet_medic_patch_result.reboot_needed)
+  ansible.builtin.include_tasks: reboot.yml
+
+- name: Post-patch health gates
+  ansible.builtin.include_tasks: gates_run.yml
+  vars:
+    _patch_reboot_gate_phase: post
+
+- name: Report
+  ansible.builtin.include_role:
+    name: medic_report
+  vars:
+    medic_report_source: patch_reboot
+    medic_report_outcome: "{{ 'fail' if fleet_medic_patch_result.reasons | length > 0 else 'ok' }}"
+    medic_report_reasons: "{{ fleet_medic_patch_result.reasons }}"
+    medic_report_payload: "{{ fleet_medic_patch_result }}"
+    medic_report_datadog_api_key: "{{ fleet_medic_patch_datadog_api_key }}"
+    medic_report_file: "{{ fleet_medic_patch_report_file }}"
+    medic_report_fail_on: "{{ fleet_medic_patch_fail_on }}"

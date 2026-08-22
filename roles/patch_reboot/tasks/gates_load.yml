@@ -1,0 +1,37 @@
+---
+# Merge order: role vars/hostvars < on-host gate file < launch override.
+
+- name: Check for the on-host gate file (linux)
+  when: ansible_os_family != 'Windows'
+  ansible.builtin.stat:
+    path: "{{ fleet_medic_health_file }}"
+  register: _patch_reboot_gf
+
+- name: Check for the on-host gate file (windows)
+  when: ansible_os_family == 'Windows'
+  ansible.windows.win_stat:
+    path: "{{ fleet_medic_health_file_windows }}"
+  register: _patch_reboot_gf_win
+
+- name: Read the on-host gate file
+  when: >-
+    (ansible_os_family != 'Windows' and _patch_reboot_gf.stat.exists)
+    or (ansible_os_family == 'Windows' and _patch_reboot_gf_win.stat.exists)
+  ansible.builtin.slurp:
+    src: "{{ fleet_medic_health_file if ansible_os_family != 'Windows' else fleet_medic_health_file_windows }}"
+  register: _patch_reboot_gf_raw
+
+- name: Merge the gate configuration
+  vars:
+    _from_file: >-
+      {{ (_patch_reboot_gf_raw.content | b64decode | from_yaml)
+         if _patch_reboot_gf_raw.content is defined else {} }}
+    _base:
+      systemd_degraded: "{{ fleet_medic_health_systemd_degraded }}"
+      services: "{{ fleet_medic_health_services }}"
+      http_checks: "{{ fleet_medic_health_http_checks }}"
+      command: "{{ fleet_medic_health_command }}"
+  ansible.builtin.set_fact:
+    _patch_reboot_gates: >-
+      {{ _base | combine(_from_file, recursive=true)
+               | combine(fleet_medic_health_override, recursive=true) }}

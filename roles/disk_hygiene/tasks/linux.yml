@@ -1,0 +1,89 @@
+---
+# Every action measures the filesystem's available bytes before/after
+# (or estimates in dry-run) and appends to the shared result.
+
+- name: Vacuum the journal
+  when: fleet_medic_hygiene_journald
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      usage=$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMGT]?B' | tail -1)
+      echo "USAGE=${usage:-unknown}"
+      if [ '{{ fleet_medic_hygiene_dry_run | bool | lower }}' = 'false' ]; then
+        before=$(df -B1 --output=avail /var/log | tail -1)
+        journalctl --vacuum-size='{{ fleet_medic_hygiene_journal_vacuum_size }}' >/dev/null 2>&1 || true
+        after=$(df -B1 --output=avail /var/log | tail -1)
+        echo "FREED=$((after - before))"
+      else
+        echo "FREED=0"
+      fi
+  register: _disk_hygiene_journal
+  changed_when: not fleet_medic_hygiene_dry_run
+
+- name: Record the journal action
+  when: fleet_medic_hygiene_journald
+  vars:
+    _freed: "{{ (_disk_hygiene_journal.stdout_lines | select('match', '^FREED=') | first | default('FREED=0')).split('=', 1) | last | int }}"
+    _usage: "{{ (_disk_hygiene_journal.stdout_lines | select('match', '^USAGE=') | first | default('USAGE=?')).split('=', 1) | last }}"
+  ansible.builtin.set_fact:
+    fleet_medic_hygiene_result: >-
+      {{ fleet_medic_hygiene_result
+         | combine({'actions': fleet_medic_hygiene_result.actions
+              + [{'target': 'journald', 'freed_bytes': _freed | int,
+                  'detail': 'journal usage before: ' ~ _usage
+                            ~ (', vacuumed to ' ~ fleet_medic_hygiene_journal_vacuum_size
+                               if not fleet_medic_hygiene_dry_run else ' (dry run)')}],
+            'total_freed_bytes': fleet_medic_hygiene_result.total_freed_bytes | int + _freed | int}) }}
+
+- name: Clean old kernels and package caches
+  when: fleet_medic_hygiene_old_kernels or fleet_medic_hygiene_package_cache
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      dry='{{ fleet_medic_hygiene_dry_run | bool | lower }}'
+      before=$(df -B1 --output=avail /var | tail -1)
+      if command -v dnf >/dev/null; then
+        if [ '{{ fleet_medic_hygiene_old_kernels | bool | lower }}' = 'true' ]; then
+          old=$(dnf repoquery --installonly --latest-limit=-1 -q 2>/dev/null | wc -l)
+          echo "OLD_KERNELS=$old"
+          [ "$dry" = 'false' ] && [ "$old" -gt 0 ] && dnf -y remove --oldinstallonly --setopt=protect_running_kernel=True >/dev/null 2>&1 || true
+        fi
+        if [ '{{ fleet_medic_hygiene_package_cache | bool | lower }}' = 'true' ] && [ "$dry" = 'false' ]; then
+          dnf clean all >/dev/null 2>&1 || true
+        fi
+      else
+        if [ '{{ fleet_medic_hygiene_old_kernels | bool | lower }}' = 'true' ]; then
+          echo "OLD_KERNELS=$(apt-get -s autoremove 2>/dev/null | grep -c '^Remv linux-' || true)"
+          [ "$dry" = 'false' ] && apt-get -y autoremove --purge >/dev/null 2>&1 || true
+        fi
+        if [ '{{ fleet_medic_hygiene_package_cache | bool | lower }}' = 'true' ] && [ "$dry" = 'false' ]; then
+          apt-get clean >/dev/null 2>&1 || true
+        fi
+      fi
+      after=$(df -B1 --output=avail /var | tail -1)
+      echo "FREED=$((after - before))"
+  register: _disk_hygiene_pkg
+  changed_when: not fleet_medic_hygiene_dry_run
+
+- name: Record the package action
+  when: fleet_medic_hygiene_old_kernels or fleet_medic_hygiene_package_cache
+  vars:
+    _freed: "{{ (_disk_hygiene_pkg.stdout_lines | select('match', '^FREED=') | first | default('FREED=0')).split('=', 1) | last | int }}"
+    _old: "{{ (_disk_hygiene_pkg.stdout_lines | select('match', '^OLD_KERNELS=') | first | default('OLD_KERNELS=0')).split('=', 1) | last }}"
+  ansible.builtin.set_fact:
+    fleet_medic_hygiene_result: >-
+      {{ fleet_medic_hygiene_result
+         | combine({'actions': fleet_medic_hygiene_result.actions
+              + [{'target': 'packages', 'freed_bytes': _freed | int,
+                  'detail': 'old kernels: ' ~ _old
+                            ~ (' (dry run)' if fleet_medic_hygiene_dry_run else '')}],
+            'total_freed_bytes': fleet_medic_hygiene_result.total_freed_bytes | int + _freed | int}) }}
+
+- name: Apply path rules
+  ansible.builtin.include_tasks: path_rule.yml
+  loop: "{{ fleet_medic_hygiene_paths }}"
+  loop_control:
+    loop_var: _disk_hygiene_rule
+    label: "{{ _disk_hygiene_rule.path }}"

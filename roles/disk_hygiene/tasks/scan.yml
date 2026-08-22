@@ -1,0 +1,21 @@
+---
+- name: Scan the largest directories per mount
+  ansible.builtin.command:
+    argv: [du, -x, -B1, --max-depth=2, "{{ item }}"]
+  register: _disk_hygiene_du
+  changed_when: false
+  failed_when: false
+  loop: "{{ fleet_medic_hygiene_scan_mounts }}"
+
+- name: Record the largest directories
+  ansible.builtin.set_fact:
+    fleet_medic_hygiene_result: >-
+      {{ fleet_medic_hygiene_result
+         | combine({'largest_dirs':
+              fleet_medic_hygiene_result.largest_dirs
+              | combine({item.item:
+                   item.stdout_lines | map('split') | sort(attribute='0', reverse=true)
+                   | map('join', ' ') | list | batch(10) | first | default([])})}) }}
+  loop: "{{ _disk_hygiene_du.results }}"
+  loop_control:
+    label: "{{ item.item }}"

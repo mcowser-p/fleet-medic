@@ -1,0 +1,38 @@
+---
+- name: "Extend the LV for {{ _disk_expand_mount }} into free VG space"
+  when: not fleet_medic_expand_dry_run
+  ansible.builtin.command:
+    argv: [lvextend, -l, "+100%FREE", "{{ _de_lv }}"]
+  register: _disk_expand_lvx
+  changed_when: _disk_expand_lvx.rc == 0
+  failed_when: false
+
+- name: "Grow the filesystem on {{ _disk_expand_mount }}"
+  when:
+    - not fleet_medic_expand_dry_run
+    - _disk_expand_lvx.rc == 0
+  ansible.builtin.include_tasks: fs_grow.yml
+
+- name: "Re-measure {{ _disk_expand_mount }} after the LV step"
+  ansible.builtin.command:
+    argv: [df, --output=pcent, "{{ _disk_expand_mount }}"]
+  register: _disk_expand_lvpct
+  changed_when: false
+
+- name: "LV step resolved {{ _disk_expand_mount }}"
+  vars:
+    _now: "{{ _disk_expand_lvpct.stdout_lines | last | trim | replace('%', '') | int }}"
+  when: fleet_medic_expand_dry_run or _now | int < fleet_medic_expand_threshold | int
+  ansible.builtin.set_fact:
+    _de_pct: "{{ _now }}"
+    _de_done: true
+    fleet_medic_expand_result: >-
+      {{ fleet_medic_expand_result
+         | combine({'mounts': fleet_medic_expand_result.mounts + [{
+              'mount': _disk_expand_mount,
+              'status': 'dry_run' if fleet_medic_expand_dry_run else 'resolved_by_lv',
+              'reason': '',
+              'usage_pct': _now | int,
+              'detail': ('would extend LV into free VG space (dry run)'
+                         if fleet_medic_expand_dry_run
+                         else 'lvextend into free VG space -> usage ' ~ _now ~ '%')}]}) }}

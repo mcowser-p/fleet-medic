@@ -1,0 +1,14 @@
+---
+# On-host health gate file — /etc/fleet-medic/health.yml
+# (C:\ProgramData\fleet-medic\health.yml on Windows). App teams maintain
+# this inside their granted config tree; patch_reboot merges it over
+# the role defaults (and fleet_medic_health_override wins over both).
+services:
+  - nginx
+  - myapp
+http_checks:
+  - url: https://localhost:8443/health
+    status_code: [200]
+    contains: '"status":"ok"'
+    validate_certs: false
+command: /opt/myapp/bin/healthcheck --quick

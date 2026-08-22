@@ -1,0 +1,9 @@
+---
+- name: Fleet medic — disk hygiene
+  hosts: all
+  become: true
+  roles:
+    - role: mcowser_p.fleet_medic.disk_hygiene
+      vars:
+        fleet_medic_hygiene_dry_run: "{{ dry_run | default(true) }}"
+        fleet_medic_hygiene_datadog_api_key: "{{ datadog_api_key | default('') }}"

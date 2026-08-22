@@ -1,0 +1,40 @@
+---
+# defaults for mcowser_p.fleet_medic.patch_reboot
+# Single-host role: rolling orchestration (serial, any_errors_fatal)
+# lives in the calling play — see playbooks/patch.yml.
+
+# --- Patching --------------------------------------------------------------
+fleet_medic_patch_security_only: false   # dnf --security; on apt systems a
+                                         # full upgrade runs with a warning
+fleet_medic_patch_exclude: []            # dnf excludes (apt: use apt-mark hold)
+fleet_medic_patch_autoremove: false
+fleet_medic_patch_check_mode: false      # report what would update, change nothing
+# Windows Update
+fleet_medic_patch_win_categories: [SecurityUpdates, CriticalUpdates, UpdateRollups]
+
+# --- Reboot ----------------------------------------------------------------
+fleet_medic_patch_reboot: if_needed      # never | if_needed | always
+fleet_medic_patch_reboot_timeout: 900
+
+# --- Health gates ----------------------------------------------------------
+# Three sources, later wins:
+#   1. these vars (settable per host via host_vars/group_vars)
+#   2. an on-host gate file teams maintain inside their granted config
+#      tree — the "local variable on each host"
+#   3. fleet_medic_health_override (a dict passed at launch, e.g. from
+#      an Ascender survey) wins over everything
+fleet_medic_health_file: /etc/fleet-medic/health.yml
+fleet_medic_health_file_windows: 'C:\ProgramData\fleet-medic\health.yml'
+fleet_medic_health_systemd_degraded: true   # linux only
+fleet_medic_health_services: []             # units that must be active
+fleet_medic_health_http_checks: []          # [{url, status_code: [200], contains}]
+fleet_medic_health_command: ""              # must exit 0
+fleet_medic_health_override: {}
+fleet_medic_health_retries: 6
+fleet_medic_health_delay: 10
+fleet_medic_health_pre_check: false         # also gate BEFORE patching
+
+# Reporting (passed through to medic_report)
+fleet_medic_patch_datadog_api_key: ""
+fleet_medic_patch_report_file: ""
+fleet_medic_patch_fail_on: fail

@@ -1,0 +1,34 @@
+---
+# defaults for mcowser_p.fleet_medic.disk_hygiene
+# Standalone runs default to DRY RUN — nothing is deleted until you set
+# fleet_medic_hygiene_dry_run: false (disk_expand arms it explicitly).
+# Database/WAL/binlog paths are constitutionally out of scope: this role
+# reports the biggest directories so growth is visible, but never
+# touches application data.
+
+fleet_medic_hygiene_dry_run: true
+
+# Reclaim targets (linux)
+fleet_medic_hygiene_journald: true
+fleet_medic_hygiene_journal_vacuum_size: 4G   # storage-doc doctrine cap
+fleet_medic_hygiene_old_kernels: true
+fleet_medic_hygiene_package_cache: true
+# Custom path rules — files older than age_days matching pattern under
+# path (find -xdev; never crosses filesystems, never follows symlinks):
+fleet_medic_hygiene_paths: []
+#  - {path: /var/tmp, age_days: 30, pattern: '*'}
+
+# Reclaim targets (windows)
+fleet_medic_hygiene_windows_temp: true
+fleet_medic_hygiene_windows_temp_age_days: 14
+fleet_medic_hygiene_recycle_bin: true
+fleet_medic_hygiene_component_cleanup: false   # DISM /StartComponentCleanup (slow)
+
+# Report: top-10 largest directories per listed mount (visibility for
+# WAL/binlog growth the role must not touch). Empty = skip.
+fleet_medic_hygiene_scan_mounts: []
+
+# Reporting (passed through to medic_report)
+fleet_medic_hygiene_datadog_api_key: ""
+fleet_medic_hygiene_report_file: ""
+fleet_medic_hygiene_fail_on: fail

@@ -1,0 +1,125 @@
+---
+- name: Prepare loopback disk fixtures
+  hosts: all
+  vars:
+    _vg: "vgmedic{{ inventory_hostname | hash('md5') | truncate(6, true, '') }}"
+  tasks:
+    - name: Refresh the apt cache
+      when: ansible_os_family == 'Debian'
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install the storage toolchain
+      ansible.builtin.package:
+        name: "{{ ['lvm2', 'xfsprogs', 'e2fsprogs', 'parted', 'util-linux']
+                  + (['cloud-utils-growpart'] if ansible_os_family == 'RedHat'
+                     else ['cloud-guest-utils']) }}"
+
+    - name: Record the VG name for converge
+      ansible.builtin.set_fact:
+        medic_vg: "{{ _vg }}"
+        cacheable: true
+
+    - name: Create the fixtures
+      ansible.builtin.shell:
+        executable: /bin/bash
+        creates: /opt/medic/.ready
+        cmd: |
+          set -e
+          mkdir -p /opt/medic /mnt/plain /mnt/lvm /mnt/small /mnt/mid
+          cd /opt/medic
+
+          # A: plain xfs partition, 2GiB, filled past threshold
+          truncate -s 2G diskA.img
+          A=$(losetup -f --show -P diskA.img)
+          parted -s "$A" mklabel gpt mkpart p1 xfs 1MiB 100%
+          sleep 1; mkfs.xfs -q "${A}p1"
+          mount "${A}p1" /mnt/plain
+          dd if=/dev/zero of=/mnt/plain/fill bs=1M count=1700 status=none
+          echo "$A" > loopA
+
+          # B: LVM ext4 with free VG space, 4GiB disk / 1.2GiB LV, filled
+          truncate -s 4G diskB.img
+          B=$(losetup -f --show -P diskB.img)
+          parted -s "$B" mklabel gpt mkpart p1 1MiB 100%
+          sleep 1; pvcreate -y "${B}p1"
+          vgcreate {{ _vg }} "${B}p1"
+          lvcreate -y -L 1.2G -n lvdata {{ _vg }}
+          mkfs.ext4 -q /dev/{{ _vg }}/lvdata
+          mount /dev/{{ _vg }}/lvdata /mnt/lvm
+          dd if=/dev/zero of=/mnt/lvm/fill bs=1M count=1000 status=none
+          echo "$B" > loopB
+
+          # D: tiny plain disk for the max_size_reached case
+          truncate -s 1G diskD.img
+          D=$(losetup -f --show -P diskD.img)
+          parted -s "$D" mklabel gpt mkpart p1 xfs 1MiB 100%
+          sleep 1; mkfs.xfs -q "${D}p1"
+          mount "${D}p1" /mnt/small
+          dd if=/dev/zero of=/mnt/small/fill bs=1M count=850 status=none
+          echo "$D" > loopD
+
+          # E: two partitions, the FIRST one mounted (not growable)
+          truncate -s 2G diskE.img
+          E=$(losetup -f --show -P diskE.img)
+          parted -s "$E" mklabel gpt mkpart p1 xfs 1MiB 50% mkpart p2 xfs 50% 100%
+          sleep 1; mkfs.xfs -q "${E}p1"
+          mount "${E}p1" /mnt/mid
+          dd if=/dev/zero of=/mnt/mid/fill bs=1M count=850 status=none
+          echo "$E" > loopE
+
+          touch /opt/medic/.ready
+
+    - name: Seed hygiene fixtures (old files)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        creates: /var/medic-old/.seeded
+        cmd: |
+          mkdir -p /var/medic-old
+          for i in $(seq 1 20); do
+            dd if=/dev/zero of=/var/medic-old/old$i.log bs=1M count=1 status=none
+            touch -d '60 days ago' /var/medic-old/old$i.log
+          done
+          touch /var/medic-old/.seeded
+
+    - name: Ensure the gate dir exists
+      ansible.builtin.file:
+        path: /etc/fleet-medic
+        state: directory
+        mode: "0755"
+
+    - name: Write the gate file
+      ansible.builtin.copy:
+        dest: /etc/fleet-medic/health.yml
+        content: |
+          command: /bin/false
+        mode: "0644"
+
+    - name: Start the Datadog mock
+      ansible.builtin.copy:
+        dest: /opt/medic/ddmock.py
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import http.server, json
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+                  with open('/opt/medic/dd-events.jsonl', 'ab') as f:
+                      f.write(body + b'\n')
+                  self.send_response(202); self.end_headers()
+                  self.wfile.write(b'{"status":"ok"}')
+              def log_message(self, *a): pass
+          http.server.HTTPServer(('127.0.0.1', 8125), H).serve_forever()
+
+    - name: Run the Datadog mock
+      ansible.builtin.shell:
+        cmd: nohup python3 /opt/medic/ddmock.py >/dev/null 2>&1 & touch /opt/medic/.dd
+        creates: /opt/medic/.dd
+      changed_when: true
+
+    - name: Wait for the mock
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8125
+        timeout: 15

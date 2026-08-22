@@ -1,0 +1,37 @@
+---
+- name: "Evaluate the path rule for {{ _disk_hygiene_rule.path }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      p={{ _disk_hygiene_rule.path | quote }}
+      [ -d "$p" ] || { echo "BYTES=0"; echo "COUNT=0"; exit 0; }
+      bytes=$(find "$p" -xdev -type f -name {{ _disk_hygiene_rule.pattern | default('*') | quote }} \
+        -mtime +{{ _disk_hygiene_rule.age_days | default(30) }} -printf '%s\n' 2>/dev/null \
+        | awk '{s+=$1} END {print s+0}')
+      count=$(find "$p" -xdev -type f -name {{ _disk_hygiene_rule.pattern | default('*') | quote }} \
+        -mtime +{{ _disk_hygiene_rule.age_days | default(30) }} 2>/dev/null | wc -l)
+      echo "BYTES=$bytes"; echo "COUNT=$count"
+      if [ '{{ fleet_medic_hygiene_dry_run | bool | lower }}' = 'false' ]; then
+        find "$p" -xdev -type f -name {{ _disk_hygiene_rule.pattern | default('*') | quote }} \
+          -mtime +{{ _disk_hygiene_rule.age_days | default(30) }} -delete 2>/dev/null || true
+      fi
+  register: _disk_hygiene_rule_out
+  changed_when: not fleet_medic_hygiene_dry_run
+
+- name: "Record the path rule for {{ _disk_hygiene_rule.path }}"
+  vars:
+    _bytes: "{{ (_disk_hygiene_rule_out.stdout_lines | select('match', '^BYTES=') | first | default('BYTES=0')).split('=', 1) | last | int }}"
+    _count: "{{ (_disk_hygiene_rule_out.stdout_lines | select('match', '^COUNT=') | first | default('COUNT=0')).split('=', 1) | last }}"
+  ansible.builtin.set_fact:
+    fleet_medic_hygiene_result: >-
+      {{ fleet_medic_hygiene_result
+         | combine({'actions': fleet_medic_hygiene_result.actions
+              + [{'target': 'path:' ~ _disk_hygiene_rule.path,
+                  'freed_bytes': (_bytes | int) if not fleet_medic_hygiene_dry_run else 0,
+                  'detail': _count ~ ' files older than '
+                            ~ (_disk_hygiene_rule.age_days | default(30)) ~ 'd, '
+                            ~ _bytes ~ ' bytes'
+                            ~ (' (dry run — would free)' if fleet_medic_hygiene_dry_run else ' deleted')}],
+            'total_freed_bytes': fleet_medic_hygiene_result.total_freed_bytes | int
+              + ((_bytes | int) if not fleet_medic_hygiene_dry_run else 0)}) }}
