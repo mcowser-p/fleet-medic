@@ -3,3 +3,9 @@ profile: production
 
 exclude_paths:
   - .github/
+
+# Multi-role collection with a deliberately shared public API: every role
+# uses the fleet_medic_* prefix (fleet_medic_expand_*, fleet_medic_health_*)
+# so callers configure one namespace. The per-role-prefix rule fights that.
+skip_list:
+  - var-naming[no-role-prefix]
