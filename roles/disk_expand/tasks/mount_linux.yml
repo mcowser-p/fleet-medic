@@ -38,8 +38,14 @@
       echo "PARTNUM=$(echo "$part" | grep -oE '[0-9]+$' || echo 0)"
       echo "DISKSIZE=$(lsblk -bdno SIZE "/dev/${pname:-missing}" 2>/dev/null || echo 0)"
       # is our partition the last on the disk (growable in place)?
-      last=$(lsblk -rbno NAME,START "/dev/${pname:-missing}" 2>/dev/null | tail -n +2 | sort -k2 -n | tail -1 | awk '{print $1}')
-      [ "/dev/$last" = "$part" ] || [ "$(basename "$part")" = "$last" ] && echo "LAST=1" || echo "LAST=0"
+      last=$(lsblk -rbno NAME,TYPE,START "/dev/${pname:-missing}" 2>/dev/null \
+             | awk '$2 == "part" {print $3, $1}' | sort -n | tail -1 | awk '{print $2}')
+      if [ -n "$last" ] && [ "$(basename "$part")" = "$last" ]; then
+        echo "LAST=1"
+      else
+        echo "LAST=0"
+      fi
+      echo "LASTPART=${last:-none}"
   register: _disk_expand_probe
   changed_when: false
 
@@ -59,6 +65,7 @@
     _de_vgfree: "{{ (_g | select('match', '^VGFREE=') | first | default('VGFREE=0')).split('=', 1) | last | int }}"
     _de_disksize: "{{ (_g | select('match', '^DISKSIZE=') | first | default('DISKSIZE=0')).split('=', 1) | last | int }}"
     _de_last: "{{ ((_g | select('match', '^LAST=') | first | default('LAST=0')).split('=', 1) | last) == '1' }}"
+    _de_lastpart: "{{ (_g | select('match', '^LASTPART=') | first | default('LASTPART=?')).split('=', 1) | last }}"
 
 - name: "Below threshold — record ok for {{ _disk_expand_mount }}"
   when: _de_pct | int < fleet_medic_expand_threshold | int

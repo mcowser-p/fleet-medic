@@ -110,30 +110,36 @@
           command: /bin/false
         mode: "0644"
 
-    - name: Start the Datadog mock
+    - name: Install the Datadog mock on the controller
+      delegate_to: localhost
+      run_once: true
       ansible.builtin.copy:
-        dest: /opt/medic/ddmock.py
+        dest: /tmp/fleet-medic-ddmock.py
         mode: "0755"
         content: |
           #!/usr/bin/env python3
-          import http.server, json
+          import http.server
           class H(http.server.BaseHTTPRequestHandler):
               def do_POST(self):
                   body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
-                  with open('/opt/medic/dd-events.jsonl', 'ab') as f:
+                  with open('/tmp/fleet-medic-dd-events.jsonl', 'ab') as f:
                       f.write(body + b'\n')
                   self.send_response(202); self.end_headers()
                   self.wfile.write(b'{"status":"ok"}')
               def log_message(self, *a): pass
           http.server.HTTPServer(('127.0.0.1', 8125), H).serve_forever()
 
-    - name: Run the Datadog mock
+    - name: Run the Datadog mock on the controller
+      delegate_to: localhost
+      run_once: true
       ansible.builtin.shell:
-        cmd: nohup python3 /opt/medic/ddmock.py >/dev/null 2>&1 & touch /opt/medic/.dd
-        creates: /opt/medic/.dd
+        cmd: nohup python3 /tmp/fleet-medic-ddmock.py >/dev/null 2>&1 & touch /tmp/fleet-medic-dd.started
+        creates: /tmp/fleet-medic-dd.started
       changed_when: true
 
     - name: Wait for the mock
+      delegate_to: localhost
+      run_once: true
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 8125

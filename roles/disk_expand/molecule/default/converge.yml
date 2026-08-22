@@ -218,8 +218,9 @@
         medic_report_datadog_url: http://127.0.0.1:8125
 
     - name: Read the captured events
+      delegate_to: localhost
       ansible.builtin.slurp:
-        src: /opt/medic/dd-events.jsonl
+        src: /tmp/fleet-medic-dd-events.jsonl
       register: _dd_capture
 
     - name: Assert S8 — the event carries the right shape
@@ -228,6 +229,7 @@
       ansible.builtin.assert:
         that:
           - "'disk_hygiene' in _events"
+          - inventory_hostname in _events
           - "'outcome:ok' in _events"
           - "'fleet_medic:disk_hygiene' in _events"
         fail_msg: "S8: {{ _events[:400] }}"

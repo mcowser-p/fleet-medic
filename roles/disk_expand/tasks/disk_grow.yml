@@ -17,8 +17,8 @@
   ansible.builtin.set_fact:
     _de_reason: partition_not_growable
     _de_reason_detail: >-
-      {{ _de_part }} is not the last partition on {{ _de_disk }} —
-      cannot grow in place
+      {{ _de_part }} is not the last partition on {{ _de_disk }}
+      (last: {{ _de_lastpart | default('?') }}) — cannot grow in place
 
 - name: "Dry run — would grow {{ _disk_expand_mount }}"
   when:
