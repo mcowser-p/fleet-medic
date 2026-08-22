@@ -38,11 +38,12 @@
       echo "PARTNUM=$(echo "$part" | grep -oE '[0-9]+$' || echo 0)"
       echo "DISKSIZE=$(lsblk -bdno SIZE "/dev/${pname:-missing}" 2>/dev/null || echo 0)"
       # is our partition the last on the disk (growable in place)?
-      # EL9 reports loop partitions as TYPE=loop, ubuntu as part — filter
-      # positionally instead: children of the disk that have a START sector
-      last=$(lsblk -rbno NAME,START "/dev/${pname:-missing}" 2>/dev/null \
-             | awk -v d="${pname:-missing}" '$1 != d && $2 ~ /^[0-9]+$/ {print $2, $1}' \
-             | sort -n | tail -1 | awk '{print $2}')
+      # lsblk column support varies by distro — read partition start
+      # sectors straight from sysfs (only partition dirs carry a start file)
+      last=$(for f in /sys/block/${pname:-missing}/*/start; do
+               [ -e "$f" ] || continue
+               echo "$(cat "$f") $(basename "$(dirname "$f")")"
+             done | sort -n | tail -1 | awk '{print $2}')
       if [ -n "$last" ] && [ "$(basename "$part")" = "$last" ]; then
         echo "LAST=1"
       else
