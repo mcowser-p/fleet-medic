@@ -11,6 +11,10 @@ fleet_medic_patch_autoremove: false
 fleet_medic_patch_check_mode: false      # report what would update, change nothing
 # Windows Update
 fleet_medic_patch_win_categories: [SecurityUpdates, CriticalUpdates, UpdateRollups]
+# winget application upgrades (how ACME clients and other winget apps
+# stay current — Windows Update does not touch them)
+fleet_medic_patch_winget: false
+fleet_medic_patch_winget_ids: []   # empty = winget upgrade --all
 
 # --- Reboot ----------------------------------------------------------------
 fleet_medic_patch_reboot: if_needed      # never | if_needed | always

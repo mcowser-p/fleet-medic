@@ -8,6 +8,28 @@
         reboot: false
       register: _patch_reboot_wu
 
+    - name: Upgrade winget-managed applications
+      when: fleet_medic_patch_winget | bool
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Continue'
+        $ids = @({{ fleet_medic_patch_winget_ids | map('regex_replace', '^(.*)$', "'\1'") | join(', ') }})
+        if (${{ fleet_medic_patch_check_mode | bool | lower }}) {
+          winget upgrade --accept-source-agreements | Out-String
+          "WINGET_MODE=check"
+        } else {
+          if ($ids.Count -gt 0) {
+            foreach ($id in $ids) {
+              winget upgrade --id $id --silent --accept-source-agreements --accept-package-agreements | Out-Null
+            }
+          } else {
+            winget upgrade --all --silent --accept-source-agreements --accept-package-agreements | Out-Null
+          }
+          "WINGET_MODE=upgraded"
+        }
+      register: _patch_reboot_winget
+      changed_when: "'WINGET_MODE=upgraded' in _patch_reboot_winget.stdout"
+      failed_when: false
+
     - name: Record the patch outcome
       ansible.builtin.set_fact:
         fleet_medic_patch_result: >-
@@ -15,6 +37,9 @@
              | combine({'updates': _patch_reboot_wu.found_update_count | default(0),
                         'installed': _patch_reboot_wu.installed_update_count | default(0),
                         'check_mode': fleet_medic_patch_check_mode | bool,
+                        'winget': (_patch_reboot_winget.stdout_lines | default(['not requested'])
+                                   | select('match', '^WINGET_MODE=') | first
+                                   | default('not requested')).split('=', 1) | last,
                         'reboot_needed': _patch_reboot_wu.reboot_required | default(false)}) }}
   rescue:
     - name: Record the patch failure
