@@ -15,4 +15,4 @@
       ansible.builtin.assert:
         that:
           - fleet_medic_expand_result.mounts | selectattr('status', 'eq', 'ok') | list | length == 2
-        fail_msg: "{{ fleet_medic_expand_result }}"
+        fail_msg: "{{ fleet_medic_expand_result | to_nice_json }}"
